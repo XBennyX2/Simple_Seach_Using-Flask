@@ -4,7 +4,7 @@ import re
 import string
 import numpy as np
 import pandas as pd
-import fitz  # PyMuPDF for PDF processing
+import fitz  
 import nltk
 from PyPDF2 import PdfReader
 from sklearn.feature_extraction.text import TfidfVectorizer
@@ -12,35 +12,29 @@ from sklearn.metrics.pairwise import cosine_similarity
 from nltk.corpus import stopwords
 from nltk.stem import WordNetLemmatizer
 
-# Download required NLTK data
 nltk.download("stopwords")
 nltk.download("wordnet")
 nltk.download("punkt")
 nltk.download("punkt_tab")
 
-# Initialize Flask app
 app = Flask(__name__)
 
-# Directories
 UPLOAD_FOLDER = "uploaded_files"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-# Initialize NLP tools
 stop_words = set(stopwords.words("english"))
 lemmatizer = WordNetLemmatizer()
 
-# Global variables
 corpus = []
 document_paths = []
 
-# Preprocess text
 def preprocess_text(text):
     text = text.lower()
-    text = re.sub(r"[^\x00-\x7F]+", " ", text)  # Remove non-ASCII characters
-    text = re.sub(r"@\w+", "", text)  # Remove mentions
-    text = re.sub(f"[{re.escape(string.punctuation)}]", " ", text)  # Remove punctuation
-    text = re.sub(r"[0-9]", "", text)  # Remove numbers
-    text = re.sub(r"\s{2,}", " ", text)  # Remove extra spaces
+    text = re.sub(r"[^\x00-\x7F]+", " ", text) 
+    text = re.sub(r"@\w+", "", text)  
+    text = re.sub(f"[{re.escape(string.punctuation)}]", " ", text)  
+    text = re.sub(r"[0-9]", "", text)  
+    text = re.sub(r"\s{2,}", " ", text)  
     words = [lemmatizer.lemmatize(word) for word in text.split() if word not in stop_words]
     return " ".join(words)
 
@@ -52,7 +46,7 @@ def extract_text_from_pdf(file_path):
             text = ""
             for page in reader.pages:
                 text += page.extract_text()
-        print(f"Extracted text from PDF: {text[:500]}")  # Log first 500 characters
+        print(f"Extracted text from PDF: {text[:500]}")  
         return text
     except Exception as e:
         print(f"Error extracting text from PDF: {e}")
@@ -62,19 +56,17 @@ def extract_text_from_docx(file_path):
     try:
         doc = Document(file_path)
         text = "\n".join([paragraph.text for paragraph in doc.paragraphs])
-        print(f"Extracted text from DOCX: {text[:500]}")  # Log first 500 characters
+        print(f"Extracted text from DOCX: {text[:500]}")  
         return text
     except Exception as e:
         print(f"Error extracting text from DOCX: {e}")
         return ""
 
 
-# Route: Render the frontend
 @app.route('/')
 def index():
     return render_template('index.html')
 
-# Route: Upload files
 @app.route("/upload", methods=["POST"])
 def upload_files():
     global corpus, document_paths
@@ -88,7 +80,7 @@ def upload_files():
         file_path = os.path.join(UPLOAD_FOLDER, filename)
         file.save(file_path)
 
-        # Extract and preprocess text
+        
         if filename.endswith(".pdf"):
             text = extract_text_from_pdf(file_path)
         elif filename.endswith(".docx"):
@@ -96,16 +88,15 @@ def upload_files():
         else:
             return jsonify({"error": f"Unsupported file type: {filename}"}), 400
 
-        if text.strip():  # Ensure the extracted text is not empty
+        if text.strip():  
             preprocessed_text = preprocess_text(text)
             corpus.append(preprocessed_text)
             document_paths.append(file_path)
         else:
             print(f"Failed to extract text from file: {filename}")
 
-    print(f"Processed Corpus: {corpus}")  # Debugging log
+    print(f"Processed Corpus: {corpus}")  
 
-    # Fit the TF-IDF vectorizer after processing files
     if corpus:
         fit_vectorizer()
     else:
@@ -113,7 +104,6 @@ def upload_files():
 
     return jsonify({"message": "Files uploaded and processed successfully!"}), 200
 
-# Initialize TF-IDF Vectorizer
 vectorizer = TfidfVectorizer(analyzer="word", ngram_range=(1, 2), max_features=10000)
 def fit_vectorizer():
     global vectorizer, corpus
@@ -121,48 +111,62 @@ def fit_vectorizer():
         vectorizer.fit(corpus)
         print("TF-IDF vectorizer fitted with corpus.")
     else:
-        print("Corpus is empty. TF-IDF vectorizer not fitted.")
+        print("Corpus is empty. TF-IDF vectorizer not fitted.") # problem 1
 
 
-# Route: Search
-@app.route("/search", methods=["POST"])
+@app.route('/search', methods=['POST'])
 def search():
-    query = request.json.get("query", "")
-    top_n = max(1, int(request.json.get("top_n", 5)))  # Ensure top_n is at least 1
+    query = request.json.get("query", "").strip()
+    top_n = int(request.json.get("top_n", 5))
 
     if not query:
         return jsonify({"error": "Query cannot be empty"}), 400
 
-    if not corpus or not vectorizer:
-        return jsonify({"error": "No documents uploaded or vectorizer not fitted"}), 400
-
-    # Preprocess the query
-    query = preprocess_text(query)
-    query_vec = vectorizer.transform([query]).toarray()
+    processed_query = preprocess_text(query)
+    query_words = set(processed_query.split())  
 
     results = []
+    word_window = 5  
 
-    # Search for the query in each document (sentence-level search)
+    
     for doc_idx, doc in enumerate(corpus):
-        sentences = nltk.sent_tokenize(doc)  # Split document into sentences
+        sentences = re.split(r'(?<!\w\.\w.)(?<![A-Z][a-z]\.)(?<=\.|\?|!)\s', doc)
         sentences_clean = [preprocess_text(sentence) for sentence in sentences]
-        sentence_vectors = vectorizer.transform(sentences_clean).toarray()
 
-        for sent_idx, sentence_vec in enumerate(sentence_vectors):
-            similarity = cosine_similarity(query_vec, sentence_vec.reshape(1, -1))[0][0]
-            results.append({
-                "document": document_paths[doc_idx],
-                "sentence": sentences[sent_idx],
-                "similarity": similarity
-            })
+        for original_sentence, clean_sentence in zip(sentences, sentences_clean):
+            clean_words = clean_sentence.split()
+            original_words = original_sentence.split()
 
-    # Sort results by similarity score in descending order
+            for i, word in enumerate(clean_words):
+                if word in query_words:
+                    start_idx = max(0, i - word_window)
+                    end_idx = min(len(original_words), i + word_window + 1)
+
+                    text_portion = " ".join(original_words[start_idx:end_idx])
+
+                    similarity = cosine_similarity(
+                        vectorizer.transform([processed_query]).toarray(),
+                        vectorizer.transform([" ".join(clean_words[start_idx:end_idx])]).toarray()
+                    )[0][0]
+
+                    results.append({
+                        "sentence": text_portion.strip(),  
+                        "similarity": similarity
+                    })
+
     results = sorted(results, key=lambda x: x["similarity"], reverse=True)
 
-    # Return the top N results
-    return jsonify(results[:top_n]), 200
+    
+    limited_results = results[:top_n]
 
-# Run Flask app
+    print(f"Final Results: {limited_results}") # returns success in the back
+
+    if not limited_results:
+        return jsonify({"message": "No matching portions found."}), 200
+
+    return jsonify(limited_results), 200
+
+
 if __name__ == "__main__":
-    fit_vectorizer()  # Fit the vectorizer after uploading files
+    fit_vectorizer()  
     app.run(debug=True)
